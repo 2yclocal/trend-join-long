@@ -1,0 +1,38 @@
+name: Trend Join Long Breakout Monitor
+
+on:
+  schedule:
+    # Starts near the 9:30 ET open; the script itself waits until 10:00 ET
+    # before alerting and self-terminates at 3:30 PM ET. UTC cron — summer
+    # (EDT) values below; when DST ends shift each hour +1.
+    - cron: '25 13 * * 1-5'   # ~9:30 AM ET start   (winter/EST: '25 14')
+  workflow_dispatch:            # manual trigger from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355    # backstop just under the 6h job limit;
+                            # the script exits on its own at 3:30 PM ET
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt
+
+      - name: Run intraday breakout monitor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python monitor.py

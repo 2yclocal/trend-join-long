@@ -106,3 +106,8 @@ def build_message(result: ScanResult) -> str:
 
 def send_scan_results(result: ScanResult) -> None:
     _send(build_message(result))
+
+
+def send_text(text: str) -> bool:
+    """Send a raw HTML message (used by the intraday breakout monitor)."""
+    return _send(text)
