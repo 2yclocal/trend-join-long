@@ -1,0 +1,108 @@
+"""
+Telegram notifier — formats the gap list and sends it via the Bot API.
+
+Format (approved mock):
+
+  🔔 TREND JOIN LONG — Gap Scan
+  Thu Jul 3 · 7:25 AM MDT · S&P 500+400
+
+  #1  POET  $20.75  +44.34%
+      📰 Announces $500M AI datacenter partnership
+      PMH $21.10 · YestHigh $14.85 · Stop $20.89 · T1 $22.31 · T2 $23.52
+
+  — PLAN —
+  Window 10:00–3:30 ET · Trigger: > PMH and > prior HOD
+  ...
+"""
+
+from __future__ import annotations
+
+import html
+import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import requests
+
+from scanner.config import settings
+from scanner.engine import ScanResult
+from scanner.gap import GapHit
+
+logger = logging.getLogger(__name__)
+
+_MT = ZoneInfo("America/Denver")
+
+_TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
+
+# Trade-plan times shown in Mountain Time (ET−2h; holds year-round since
+# both zones shift for DST together). ET original: 10:00–3:30, flat 3:51.
+_PLAN = (
+    "<b>— PLAN —</b>\n"
+    "Window 8:00–1:30 MT · Trigger: &gt; PMH and &gt; prior HOD\n"
+    "Stop: 1% below PMH or LOD (lower) = 1R\n"
+    "Scale ⅓ at +1R, ⅓ at +2R, trail ⅓ on 21-EMA\n"
+    "⏰ Flat by 1:51 PM MT"
+)
+
+
+def _send(text: str) -> bool:
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        logger.warning("Telegram credentials not configured — skipping notification")
+        return False
+
+    url = _TELEGRAM_API.format(token=settings.telegram_bot_token)
+    payload = {
+        "chat_id": settings.telegram_chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        logger.info("Telegram notification sent")
+        return True
+    except Exception as exc:
+        logger.error(f"Telegram send failed: {exc}")
+        return False
+
+
+def _price(v: float) -> str:
+    return f"${v:,.2f}"
+
+
+def _format_hit(rank: int, h: GapHit) -> str:
+    line1 = f"<b>#{rank}  {h.symbol}  {_price(h.price)}  +{h.gap_pct:.2f}%</b>"
+    line2 = f"    📰 {html.escape(h.catalyst)}"
+    line3 = (
+        f"    PMH {_price(h.pm_high)} · YestHigh {_price(h.prev_high)}"
+        f" · Stop {_price(h.stop)} · T1 {_price(h.t1)} · T2 {_price(h.t2)}"
+    )
+    if h.rvol is not None:
+        line3 += f" · RVOL {h.rvol:.1f}×"
+    return "\n".join([line1, line2, line3])
+
+
+def build_message(result: ScanResult) -> str:
+    now = datetime.now(_MT).strftime("%a %b %-d · %-I:%M %p %Z")
+    tag = " (BACKTEST — last session's open gaps)" if result.mode == "backtest" else ""
+
+    header = (
+        f"🔔 <b>TREND JOIN LONG — Gap Scan</b>{tag}\n"
+        f"{now} · S&amp;P 500+400 · gap &gt; {settings.gap_min_pct:g}%"
+        f" · RVOL &gt; {settings.rvol_min:g}\n"
+    )
+
+    if not result.hits:
+        return header + "\nNo qualifying gaps today."
+
+    blocks = [_format_hit(i, h) for i, h in enumerate(result.hits, start=1)]
+    message = header + "\n" + "\n\n".join(blocks) + "\n\n" + _PLAN
+
+    if len(message) > 4000:  # Telegram hard limit is 4096
+        message = message[:3990] + "\n…(truncated)"
+    return message
+
+
+def send_scan_results(result: ScanResult) -> None:
+    _send(build_message(result))

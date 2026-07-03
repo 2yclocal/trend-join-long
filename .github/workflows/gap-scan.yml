@@ -1,0 +1,37 @@
+name: Trend Join Long Gap Scan
+
+on:
+  schedule:
+    # GitHub cron is UTC and typically fires 5–15 min late — times below are
+    # scheduled early to compensate. ET is UTC-4 in summer (EDT).
+    - cron: '50 12 * * 1-5'   # ~9:00 AM ET early scan   (winter/EST: '50 13')
+    - cron: '15 13 * * 1-5'   # ~9:25 AM ET final scan   (winter/EST: '15 14')
+  workflow_dispatch:            # manual trigger from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  gap-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt
+
+      - name: Run gap scan + send Telegram alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python run.py
