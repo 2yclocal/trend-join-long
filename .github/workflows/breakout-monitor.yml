@@ -1,12 +1,11 @@
 name: Trend Join Long Breakout Monitor
 
 on:
-  schedule:
-    # Starts near the 9:30 ET open; the script itself waits until 10:00 ET
-    # before alerting and self-terminates at 3:30 PM ET. UTC cron — summer
-    # (EDT) values below; when DST ends shift each hour +1.
-    - cron: '25 13 * * 1-5'   # ~9:30 AM ET start   (winter/EST: '25 14')
-  workflow_dispatch:            # manual trigger from the Actions tab
+  # Triggered by cron-job.org at 7:25 AM MT (near the open). The script
+  # rebuilds the gap list, waits until the 8:00 AM MT window, then polls
+  # and self-terminates at 1:30 PM MT. GitHub's built-in `schedule:` cron
+  # was removed for the same reliability reasons as the gap scan.
+  workflow_dispatch:            # cron-job.org + manual "Run workflow" button
 
 permissions:
   contents: read

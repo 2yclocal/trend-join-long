@@ -1,12 +1,12 @@
 name: Trend Join Long Gap Scan
 
 on:
-  schedule:
-    # GitHub cron is UTC and typically fires 5–15 min late — times below are
-    # scheduled early to compensate. ET is UTC-4 in summer (EDT).
-    - cron: '50 12 * * 1-5'   # ~9:00 AM ET early scan   (winter/EST: '50 13')
-    - cron: '15 13 * * 1-5'   # ~9:25 AM ET final scan   (winter/EST: '15 14')
-  workflow_dispatch:            # manual trigger from the Actions tab
+  # Scheduling is handled by cron-job.org, which POSTs to this workflow's
+  # dispatch endpoint at 6:50 and 7:15 AM MT. GitHub's built-in `schedule:`
+  # cron was removed — it silently dropped runs and can't be trusted for a
+  # time-critical premarket window. cron-job.org fires to the minute and is
+  # timezone-aware (no manual DST shifting).
+  workflow_dispatch:            # cron-job.org + manual "Run workflow" button
 
 permissions:
   contents: read
