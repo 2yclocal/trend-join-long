@@ -78,8 +78,6 @@ def _format_hit(rank: int, h: GapHit) -> str:
         f"    PMH {_price(h.pm_high)} · YestHigh {_price(h.prev_high)}"
         f" · Stop {_price(h.stop)} · T1 {_price(h.t1)} · T2 {_price(h.t2)}"
     )
-    if h.rvol is not None:
-        line3 += f" · RVOL {h.rvol:.1f}×"
     return "\n".join([line1, line2, line3])
 
 
@@ -89,8 +87,7 @@ def build_message(result: ScanResult) -> str:
 
     header = (
         f"🔔 <b>TREND JOIN LONG — Gap Scan</b>{tag}\n"
-        f"{now} · S&amp;P 500+400 · gap &gt; {settings.gap_min_pct:g}%"
-        f" · RVOL &gt; {settings.rvol_min:g}\n"
+        f"{now} · S&amp;P 500+400 · gap &gt; {settings.gap_min_pct:g}%\n"
     )
 
     if not result.hits:

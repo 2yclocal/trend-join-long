@@ -94,24 +94,6 @@ def premarket_slice(df: pd.DataFrame, day) -> pd.DataFrame:
     return df[mask]
 
 
-def avg_prior_premarket_volume(df: pd.DataFrame, today) -> float | None:
-    """Average premarket volume across prior days present in the frame."""
-    idx = df.index
-    mask = (
-        (pd.Index(idx.date) < today)
-        & (pd.Index(idx.time) >= _PM_START)
-        & (pd.Index(idx.time) < _PM_END)
-    )
-    prior = df[mask]
-    if prior.empty:
-        return None
-    daily = prior.groupby(pd.Index(prior.index.date))["Volume"].sum()
-    daily = daily[daily > 0]
-    if daily.empty:
-        return None
-    return float(daily.mean())
-
-
 def _truncate(title: str) -> str:
     return title[:87] + "…" if len(title) > 90 else title
 

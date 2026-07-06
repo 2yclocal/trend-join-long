@@ -4,7 +4,10 @@ Gap detection + trade-plan levels.
 A stock qualifies when, at scan time (premarket):
   - gap % vs previous close  >  GAP_MIN_PCT   (default 3%)
   - last premarket price     >  MIN_PRICE     (default $3)
-  - premarket RVOL           >  RVOL_MIN      (default 1.5×)
+
+(A premarket-volume/RVOL gate was dropped: free data sources return no
+premarket volume, so it could not be computed reliably. Size/liquidity is
+still gated by S&P 500/400 index membership.)
 
 Trade-plan levels included with each hit:
   trigger = max(premarket high, yesterday's high)
@@ -29,7 +32,6 @@ class GapHit:
     prev_high: float
     pm_high: float
     pm_volume: float
-    rvol: float | None    # None = not computable (backtest / no prior data)
     catalyst: str = ""
 
     @property
@@ -59,11 +61,5 @@ def gap_percent(price: float, prev_close: float) -> float:
     return (price - prev_close) / prev_close * 100
 
 
-def passes_filters(price: float, gap_pct: float, rvol: float | None) -> bool:
-    if price <= settings.min_price:
-        return False
-    if gap_pct <= settings.gap_min_pct:
-        return False
-    if rvol is not None and rvol <= settings.rvol_min:
-        return False
-    return True
+def passes_filters(price: float, gap_pct: float) -> bool:
+    return price > settings.min_price and gap_pct > settings.gap_min_pct

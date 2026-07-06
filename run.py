@@ -46,8 +46,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"  {len(result.hits)} qualifying gap(s) out of {result.symbols_checked} scanned")
     for i, h in enumerate(result.hits, start=1):
-        rvol = f"{h.rvol:.1f}x" if h.rvol is not None else "n/a"
-        print(f"  #{i}  {h.symbol:<6} ${h.price:<8.2f} +{h.gap_pct:.2f}%  RVOL {rvol}")
+        print(f"  #{i}  {h.symbol:<6} ${h.price:<8.2f} +{h.gap_pct:.2f}%")
         print(f"      {h.catalyst}")
     print("=" * 60)
 

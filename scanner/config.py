@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     # Gap scan filters
     gap_min_pct: float = 3.0       # minimum gap % vs previous close
     min_price: float = 3.0         # minimum share price
-    rvol_min: float = 1.5          # premarket volume vs avg premarket volume
     max_results: int = 20          # cap the alert list
 
     # Trade plan
@@ -27,7 +26,6 @@ class Settings(BaseSettings):
 
     # Data fetching
     batch_size: int = 50           # symbols per yfinance batch download
-    rvol_lookback_days: int = 5    # prior days for avg premarket volume
     news_max_age_hours: int = 48   # catalyst headline freshness window
 
 
