@@ -1,10 +1,13 @@
 name: Trend Join Long Breakout Monitor
 
 on:
-  # Triggered by cron-job.org at 7:25 AM MT (near the open). The script
-  # rebuilds the gap list, waits until the 8:00 AM MT window, then polls
-  # and self-terminates at 1:30 PM MT. GitHub's built-in `schedule:` cron
-  # was removed for the same reliability reasons as the gap scan.
+  # Triggered by cron-job.org at 7:55 AM MT (9:55 ET, just before the
+  # 8:00 AM MT / 10:00 ET breakout window opens). The script rebuilds the
+  # gap list, waits ~5 min for the window, polls 1-min bars, and self-
+  # terminates at 1:30 PM MT / 3:30 PM ET. Launch time is deliberately
+  # late: a single GitHub job is hard-capped at 6h, so starting at 9:55 ET
+  # keeps the ~5.5h run safely under the limit. GitHub's built-in
+  # `schedule:` cron was removed for the same reliability reasons as the scan.
   workflow_dispatch:            # cron-job.org + manual "Run workflow" button
 
 permissions:
@@ -13,8 +16,8 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 355    # backstop just under the 6h job limit;
-                            # the script exits on its own at 3:30 PM ET
+    timeout-minutes: 350    # backstop under GitHub's 6h (360 min) job cap;
+                            # the script self-exits at 3:30 PM ET (~335 min)
 
     steps:
       - name: Checkout repo
