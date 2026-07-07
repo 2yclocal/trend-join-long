@@ -42,9 +42,12 @@ class ScanResult:
 
 def _attach_catalysts(hits: list[GapHit]) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(get_catalyst, h.symbol): h for h in hits}
+        futures = {pool.submit(get_catalyst, h.symbol, h.company_name): h for h in hits}
         for fut in concurrent.futures.as_completed(futures):
-            futures[fut].catalyst = fut.result() or "No fresh headline found"
+            h = futures[fut]
+            headline, summary = fut.result()
+            h.catalyst = headline or "No fresh headline found"
+            h.catalyst_summary = summary
 
 
 def _finalize(hits: list[GapHit], symbols_checked: int, mode: str) -> ScanResult:

@@ -32,7 +32,8 @@ class GapHit:
     prev_high: float
     pm_high: float
     pm_volume: float
-    catalyst: str = ""
+    catalyst: str = ""            # headline
+    catalyst_summary: str = ""    # one-sentence context under the headline
 
     @property
     def trigger(self) -> float:

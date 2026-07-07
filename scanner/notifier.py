@@ -72,13 +72,17 @@ def _price(v: float) -> str:
 
 
 def _format_hit(rank: int, h: GapHit) -> str:
-    line1 = f"<b>#{rank}  {h.symbol}  {_price(h.price)}  +{h.gap_pct:.2f}%</b>"
-    line2 = f"    📰 {html.escape(h.catalyst)}"
-    line3 = (
+    lines = [
+        f"<b>#{rank}  {h.symbol}  {_price(h.price)}  +{h.gap_pct:.2f}%</b>",
+        f"    📰 {html.escape(h.catalyst)}",
+    ]
+    if h.catalyst_summary:
+        lines.append(f"    <i>{html.escape(h.catalyst_summary)}</i>")
+    lines.append(
         f"    PMH {_price(h.pm_high)} · YestHigh {_price(h.prev_high)}"
         f" · Stop {_price(h.stop)} · T1 {_price(h.t1)} · T2 {_price(h.t2)}"
     )
-    return "\n".join([line1, line2, line3])
+    return "\n".join(lines)
 
 
 def build_message(

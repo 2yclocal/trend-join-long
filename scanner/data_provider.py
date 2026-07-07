@@ -9,6 +9,8 @@ Batched yf.download calls keep the request count low (~20 requests for
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from datetime import datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -94,22 +96,111 @@ def premarket_slice(df: pd.DataFrame, day) -> pd.DataFrame:
     return df[mask]
 
 
-def _truncate(title: str) -> str:
-    return title[:87] + "…" if len(title) > 90 else title
+# Headlines from stock-roundup bots (ChartMill, generic wires) that name a
+# basket rather than a catalyst. Skipped in favour of company-specific news.
+_GENERIC_MARKERS = (
+    "gainers and losers", "top gainers", "top losers", "top movers",
+    "biggest movers", "market movers", "movers within", "stocks moving",
+    "stocks are moving", "moving in today", "stocks gapping",
+    "stocks are gapping", "stocks that are", "stocks to watch",
+    "pre-market session", "premarket session", "sector update",
+    "stock market today", "dow jones futures", "s&p500 index", "s&p 500 index",
+)
+
+# Corporate-name noise words stripped before matching a headline to a company.
+_NAME_STOPWORDS = {
+    "the", "corporation", "corp", "inc", "incorporated", "company", "co",
+    "technologies", "technology", "ltd", "limited", "group", "holdings",
+    "plc", "international", "industries", "systems", "class", "&",
+}
 
 
-def _finnhub_headline(symbol: str) -> str:
-    """Most recent company-news headline from Finnhub. '' if unavailable."""
+@dataclass
+class _News:
+    title: str
+    summary: str
+    ts: int   # epoch seconds
+
+
+def _cutoff_ts() -> int:
+    return int((datetime.now(timezone.utc)
+                - timedelta(hours=settings.news_max_age_hours)).timestamp())
+
+
+def _is_generic(text: str) -> bool:
+    low = text.lower()
+    return any(m in low for m in _GENERIC_MARKERS)
+
+
+def _name_tokens(company_name: str) -> list[str]:
+    toks = []
+    for w in company_name.replace(",", " ").replace(".", " ").split():
+        wl = w.lower().strip("&")
+        if len(wl) >= 3 and wl not in _NAME_STOPWORDS:
+            toks.append(wl)
+    return toks
+
+
+def _relevance(item: _News, symbol: str, name_tokens: list[str]) -> int:
+    hay = item.title.lower()
+    score = 0
+    root = symbol.split(".")[0].lower()   # strip .TO etc.
+    if re.search(rf"\b{re.escape(root)}\b", hay):
+        score += 3
+    if any(tok in hay for tok in name_tokens):
+        score += 2
+    return score
+
+
+def _clip(text: str, limit: int) -> str:
+    """Collapse whitespace and cut at a word boundary with an ellipsis."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _first_sentence(summary: str, limit: int = 160) -> str:
+    s = " ".join(summary.split())
+    m = re.search(r"(.+?[.!?])(\s|$)", s)
+    return _clip(m.group(1) if m else s, limit)
+
+
+def _select_catalyst(items: list[_News], symbol: str, company_name: str) -> tuple[str, str]:
+    """Pick the most relevant fresh headline; return (headline, summary_sentence)."""
+    cut = _cutoff_ts()
+    fresh = [it for it in items if it.title and it.ts >= cut]
+    if not fresh:
+        return "", ""
+
+    # Prefer company-specific headlines; fall back to generic only if nothing else.
+    specific = [it for it in fresh if not _is_generic(it.title)]
+    pool = specific or fresh
+    pool.sort(key=lambda it: (_relevance(it, symbol, _name_tokens(company_name)), it.ts),
+              reverse=True)
+    best = pool[0]
+
+    headline = _clip(best.title, 110)
+    summary = "" if (not best.summary or _is_generic(best.summary)) \
+        else _first_sentence(best.summary, 160)
+    # Drop a summary that just restates the headline.
+    if summary and summary.lower()[:40] == headline.lower()[:40]:
+        summary = ""
+    return headline, summary
+
+
+def _finnhub_items(symbol: str) -> list[_News]:
     if not settings.finnhub_api_key:
-        return ""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.news_max_age_hours)
+        return []
+    now = datetime.now(timezone.utc)
+    frm = now - timedelta(hours=settings.news_max_age_hours)
     try:
         resp = requests.get(
             "https://finnhub.io/api/v1/company-news",
             params={
                 "symbol": symbol,
-                "from": cutoff.date().isoformat(),
-                "to": datetime.now(timezone.utc).date().isoformat(),
+                "from": frm.date().isoformat(),
+                "to": now.date().isoformat(),
                 "token": settings.finnhub_api_key,
             },
             timeout=10,
@@ -118,57 +209,49 @@ def _finnhub_headline(symbol: str) -> str:
         items = resp.json() or []
     except Exception as exc:
         logger.warning(f"Finnhub news failed for {symbol}: {exc}")
-        return ""
-
-    best_title, best_ts = "", 0
-    for it in items:
-        ts = it.get("datetime") or 0
-        title = (it.get("headline") or "").strip()
-        if not title or ts <= best_ts:
-            continue
-        if datetime.fromtimestamp(ts, tz=timezone.utc) < cutoff:
-            continue
-        best_title, best_ts = title, ts
-    return _truncate(best_title)
+        return []
+    return [
+        _News((it.get("headline") or "").strip(),
+              (it.get("summary") or "").strip(),
+              int(it.get("datetime") or 0))
+        for it in items if it.get("headline")
+    ]
 
 
-def get_catalyst(symbol: str) -> str:
-    """Most recent news headline within the freshness window, one line.
-
-    Finnhub first (if FINNHUB_API_KEY is set), Yahoo as fallback.
-    """
-    headline = _finnhub_headline(symbol)
-    if headline:
-        return headline
-
+def _yahoo_items(symbol: str) -> list[_News]:
     try:
-        items = yf.Ticker(symbol).news or []
+        raw = yf.Ticker(symbol).news or []
     except Exception as exc:
-        logger.warning(f"News fetch failed for {symbol}: {exc}")
-        return ""
-
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.news_max_age_hours)
-    best_title, best_time = "", None
-
-    for it in items:
+        logger.warning(f"Yahoo news failed for {symbol}: {exc}")
+        return []
+    out: list[_News] = []
+    for it in raw:
         content = it.get("content", it)
         title = (content.get("title") or "").strip()
         if not title:
             continue
-
-        published = None
+        summary = (content.get("summary") or content.get("description") or "").strip()
+        ts = 0
         pub = content.get("pubDate") or content.get("displayTime")
         if pub:
             try:
-                published = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
+                ts = int(datetime.fromisoformat(str(pub).replace("Z", "+00:00")).timestamp())
             except ValueError:
                 pass
-        elif it.get("providerPublishTime"):
-            published = datetime.fromtimestamp(it["providerPublishTime"], tz=timezone.utc)
+        if not ts and it.get("providerPublishTime"):
+            ts = int(it["providerPublishTime"])
+        out.append(_News(title, summary, ts))
+    return out
 
-        if published is None or published < cutoff:
-            continue
-        if best_time is None or published > best_time:
-            best_title, best_time = title, published
 
-    return _truncate(best_title)
+def get_catalyst(symbol: str, company_name: str = "") -> tuple[str, str]:
+    """Best (headline, summary_sentence) for a symbol within the freshness window.
+
+    Prefers company-specific news over generic roundup headlines, and picks the
+    most relevant (ticker/name mention), then most recent. Finnhub first, Yahoo
+    as fallback. Either element may be '' if nothing suitable is found.
+    """
+    headline, summary = _select_catalyst(_finnhub_items(symbol), symbol, company_name)
+    if headline:
+        return headline, summary
+    return _select_catalyst(_yahoo_items(symbol), symbol, company_name)
