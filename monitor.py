@@ -40,7 +40,7 @@ from scanner.config import settings
 from scanner.data_provider import ET, get_intraday_bars
 from scanner.engine import run_live_scan
 from scanner.gap import GapHit
-from scanner.notifier import _MT, send_text
+from scanner.notifier import _MT, build_message, send_text
 from scanner.universe import load_us_symbols
 
 WINDOW_START = dtime(10, 0)    # ET — 8:00 AM MT (user's trade-plan window)
@@ -88,11 +88,9 @@ def main():
         logger.info("No gappers to monitor — exiting quietly.")
         return
 
-    triggers = " · ".join(f"{s} {_price(h.trigger)}" for s, h in watch.items())
-    send_text(
-        f"👁 <b>Breakout monitor live</b> — watching {len(watch)} gapper(s) "
-        f"until 1:30 PM MT\nTriggers: {triggers}"
-    )
+    # Same rich format as the gap-scan alert (ranked list + levels + plan),
+    # with a header that marks it as the monitor going live for the session.
+    send_text(build_message(result, emoji="👁", title="TREND JOIN LONG — Monitor Live"))
     logger.info(f"Watching {len(watch)}: {list(watch)}")
 
     while _now_et().time() < WINDOW_START:

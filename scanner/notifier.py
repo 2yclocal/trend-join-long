@@ -38,7 +38,7 @@ _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 # both zones shift for DST together). ET original: 10:00–3:30, flat 3:51.
 _PLAN = (
     "<b>— PLAN —</b>\n"
-    "Window 8:00–1:30 MT · Trigger: &gt; PMH and &gt; prior HOD\n"
+    "Window 8:00–1:30 MT · Trigger: &gt; PMH and &gt; YestHigh\n"
     "Stop: 1% below PMH or LOD (lower) = 1R\n"
     "Scale ⅓ at +1R, ⅓ at +2R, trail ⅓ on 21-EMA\n"
     "⏰ Flat by 1:51 PM MT"
@@ -81,12 +81,16 @@ def _format_hit(rank: int, h: GapHit) -> str:
     return "\n".join([line1, line2, line3])
 
 
-def build_message(result: ScanResult) -> str:
+def build_message(
+    result: ScanResult,
+    emoji: str = "🔔",
+    title: str = "TREND JOIN LONG — Gap Scan",
+) -> str:
     now = datetime.now(_MT).strftime("%a %b %-d · %-I:%M %p %Z")
     tag = " (BACKTEST — last session's open gaps)" if result.mode == "backtest" else ""
 
     header = (
-        f"🔔 <b>TREND JOIN LONG — Gap Scan</b>{tag}\n"
+        f"{emoji} <b>{title}</b>{tag}\n"
         f"{now} · S&amp;P 500+400 · gap &gt; {settings.gap_min_pct:g}%\n"
     )
 
