@@ -69,14 +69,17 @@ def _breakout_alert(h: GapHit, last: float, lod: float) -> str:
     stop = min(h.pm_high, lod) * (1 - settings.stop_pct_below_pmh / 100)
     one_r = trig - stop
     now_mt = datetime.now(_MT).strftime("%-I:%M %p %Z")
-    return (
-        f"🚨 <b>BREAKOUT — {h.symbol}</b> · {now_mt}\n"
-        f"{_price(last)} crossed trigger {_price(trig)}\n"
-        f"Entry {_price(trig)} · Stop {_price(stop)} · 1R {_price(one_r)}\n"
-        f"T1 {_price(trig + one_r)} · T2 {_price(trig + 2 * one_r)}\n"
-        f"Gap +{h.gap_pct:.1f}% · PMH {_price(h.pm_high)} · YestHigh {_price(h.prev_high)}\n"
-        f"📰 {html.escape(h.catalyst)}"
-    )
+    lines = [
+        f"🚨 <b>BREAKOUT — {h.symbol}</b> · {now_mt}",
+        f"{_price(last)} crossed trigger {_price(trig)}",
+        f"Entry {_price(trig)} · Stop {_price(stop)} · 1R {_price(one_r)}",
+        f"T1 {_price(trig + one_r)} · T2 {_price(trig + 2 * one_r)}",
+        f"Gap +{h.gap_pct:.1f}% · PMH {_price(h.pm_high)} · YestHigh {_price(h.prev_high)}",
+        f"📰 {html.escape(h.catalyst)}",
+    ]
+    if h.catalyst_summary:
+        lines.append(f"<i>{html.escape(h.catalyst_summary)}</i>")
+    return "\n".join(lines)
 
 
 def main():

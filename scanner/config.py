@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Gap scan filters
     gap_min_pct: float = 3.0       # minimum gap % vs previous close
     min_price: float = 3.0         # minimum share price
-    max_results: int = 20          # cap the alert list
+    max_results: int = 15          # cap the alert list
 
     # Trade plan
     stop_pct_below_pmh: float = 1.0   # stop = premarket high − 1%
