@@ -1,6 +1,6 @@
 """
-Gap-and-breakout backtester — replays the trade plan (trigger/stop/T1/T2)
-over historical daily bars for one symbol.
+Gap-and-breakout backtester — replays the trade plan (trigger/stop, then a
+fixed intraday gain target) over historical daily bars for one symbol.
 
 Data limitation: yfinance only retains 1-minute premarket bars for a few
 recent weeks, so a true bar-by-bar intraday replay isn't possible across
@@ -14,11 +14,15 @@ run_backtest_scan() in engine.py:
     If the day's high never reaches the trigger, the breakout never
     fired intraday — no trade, not counted.
   - stop = pm_high proxy × (1 − stop_pct_below_pmh%) — mirrors GapHit.stop.
-  - Exit, using only that day's high/low (position is flat by day's end
-    per the trade plan): daily bars can't reveal whether the stop or a
-    target was touched first when both fall inside the day's range, so
-    the stop is checked first as the conservative assumption, then T2,
-    then T1, else exit at the close.
+  - Win criterion: the day's high reaches trigger × (1 + target_gain_pct%)
+    at some point intraday — a fixed % gain from entry, not the live
+    plan's 1R-based T1/T2. Daily bars can't reveal whether the stop or the
+    target was touched first when both fall inside the day's range, so the
+    stop is checked first (a trade stopped out is always a loss, even if
+    price would have reached the target later that day); otherwise a
+    target hit is a win; otherwise exit at the close (flat by day's end
+    per the trade plan) — a win or loss depending on where it closed
+    relative to entry.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ class Trade:
     entry_price: float
     exit_price: float
     pnl_pct: float
-    outcome: str  # "stop" | "T1" | "T2" | "close"
+    outcome: str  # "stop" | "target" | "close"
 
 
 @dataclass
@@ -60,9 +64,10 @@ class BacktestResult:
 
 
 TRADE_SIZE = 100_000  # fixed notional per trade — not compounded
+TARGET_GAIN_PCT = 1.5  # win = day's high reaches this % gain from entry
 
 
-def run_backtest(symbol: str, max_trades: int = 100) -> BacktestResult:
+def run_backtest(symbol: str, max_trades: int = 100, target_gain_pct: float = TARGET_GAIN_PCT) -> BacktestResult:
     df = get_daily_bars_full(symbol)
     if len(df) < 3:
         raise ValueError(f"Insufficient data: {len(df)} bars")
@@ -89,16 +94,12 @@ def run_backtest(symbol: str, max_trades: int = 100) -> BacktestResult:
             continue  # gap qualified but never broke out — no trade
 
         stop = pm_high_proxy * (1 - settings.stop_pct_below_pmh / 100)
-        one_r = trigger - stop
-        t1 = trigger + one_r
-        t2 = trigger + 2 * one_r
+        target = trigger * (1 + target_gain_pct / 100)
 
         if low[i] <= stop:
             exit_price, outcome = stop, "stop"
-        elif high[i] >= t2:
-            exit_price, outcome = t2, "T2"
-        elif high[i] >= t1:
-            exit_price, outcome = t1, "T1"
+        elif high[i] >= target:
+            exit_price, outcome = target, "target"
         else:
             exit_price, outcome = close[i], "close"
 

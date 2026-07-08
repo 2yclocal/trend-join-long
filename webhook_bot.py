@@ -98,8 +98,8 @@ def _run_backtest(symbol: str) -> str:
     )
     lines.append(f"Range: {result.first_trade_date} → {result.last_trade_date}")
     lines.append(
-        "\n<i>Note: daily-bar approximation — entries/exits are simulated from each "
-        "gap day's OHLC, not a true intraday replay (see scanner/backtest.py).</i>"
+        "\n<i>Win = day's high reached +1.5% from entry before the stop hit. "
+        "Daily-bar approximation, not a true intraday replay (see scanner/backtest.py).</i>"
     )
     return "\n".join(lines)
 
