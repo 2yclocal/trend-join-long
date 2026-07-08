@@ -1,0 +1,195 @@
+//@version=6
+indicator("Markov 2.0 — Regime Table", overlay=true, max_bars_back=5000)
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+string G   = "Markov 2.0"
+int   WIN  = input.int  (20,    "Stride window (bars)", minval=5,     maxval=250,    group=G)
+float BULL = input.float(0.05,  "Bull threshold",       step=0.005,   minval=0.001,  group=G)
+float BEAR = input.float(-0.05, "Bear threshold",       step=0.005,   maxval=-0.001, group=G)
+bool  SHOW = input.bool (false, "Regime background",                                 group=G)
+
+// ─── COLORS ───────────────────────────────────────────────────────────────────
+color BULL_C = #2ecc71
+color BEAR_C = #e74c3c
+color SIDE_C = #f0c040
+color HMM_C  = #3498db
+color BG_DRK = #1a1a2e
+color BG_CEL = #1e2a4a
+color TXT_W  = #e0e0e0
+color TXT_D  = #6677aa
+color HDR_BG = #0f3460
+
+// ─── STATE MACHINE — stride-sampled, non-overlapping windows (FIX 1) ──────────
+var float pbc = na
+var int   cs  = na
+var matrix<int> cnt = matrix.new<int>(3, 3, 0)
+
+if bar_index % WIN == 0
+    if not na(pbc)
+        float ret = (close - pbc) / pbc
+        int   ns  = ret >= BULL ? 1 : ret <= BEAR ? 2 : 0
+        if not na(cs)
+            matrix.set(cnt, cs, ns, matrix.get(cnt, cs, ns) + 1)
+        cs := ns
+    pbc := close
+
+// ─── TRANSITION MATRIX ───────────────────────────────────────────────────────
+int r0 = matrix.get(cnt,0,0) + matrix.get(cnt,0,1) + matrix.get(cnt,0,2)
+int r1 = matrix.get(cnt,1,0) + matrix.get(cnt,1,1) + matrix.get(cnt,1,2)
+int r2 = matrix.get(cnt,2,0) + matrix.get(cnt,2,1) + matrix.get(cnt,2,2)
+
+float p00 = r0 > 0 ? float(matrix.get(cnt,0,0)) / float(r0) : 0.0
+float p01 = r0 > 0 ? float(matrix.get(cnt,0,1)) / float(r0) : 0.0
+float p02 = r0 > 0 ? float(matrix.get(cnt,0,2)) / float(r0) : 0.0
+float p10 = r1 > 0 ? float(matrix.get(cnt,1,0)) / float(r1) : 0.0
+float p11 = r1 > 0 ? float(matrix.get(cnt,1,1)) / float(r1) : 0.0
+float p12 = r1 > 0 ? float(matrix.get(cnt,1,2)) / float(r1) : 0.0
+float p20 = r2 > 0 ? float(matrix.get(cnt,2,0)) / float(r2) : 0.0
+float p21 = r2 > 0 ? float(matrix.get(cnt,2,1)) / float(r2) : 0.0
+float p22 = r2 > 0 ? float(matrix.get(cnt,2,2)) / float(r2) : 0.0
+
+// ─── SIGNAL & POSITION (STANDALONE 100% cap) ─────────────────────────────────
+float nb  = na(cs) ? na : cs == 0 ? p01 : cs == 1 ? p11 : p21
+float nd  = na(cs) ? na : cs == 0 ? p02 : cs == 1 ? p12 : p22
+float ns2 = na(cs) ? na : cs == 0 ? p00 : cs == 1 ? p10 : p20
+float sg  = na(nb) ? na : nb - nd
+float pos = na(sg) ? na : math.max(-1.0, math.min(1.0, sg))
+
+// ─── MULTI-PERIOD FORECASTS (matrix powers) ───────────────────────────────────
+// t+2: distribute t+1 probs through the matrix again
+float t2_side = na(ns2) ? na : ns2*p00 + nb*p10 + nd*p20
+float t2_bull = na(ns2) ? na : ns2*p01 + nb*p11 + nd*p21
+float t2_bear = na(ns2) ? na : ns2*p02 + nb*p12 + nd*p22
+float sg2     = na(t2_bull) ? na : t2_bull - t2_bear
+
+// t+3
+float t3_side = na(t2_side) ? na : t2_side*p00 + t2_bull*p10 + t2_bear*p20
+float t3_bull = na(t2_side) ? na : t2_side*p01 + t2_bull*p11 + t2_bear*p21
+float t3_bear = na(t2_side) ? na : t2_side*p02 + t2_bull*p12 + t2_bear*p22
+float sg3     = na(t3_bull) ? na : t3_bull - t3_bear
+
+// ─── HMM-INSPIRED VOL REGIME ──────────────────────────────────────────────────
+// Mirrors the two features GaussianHMM uses: return direction + volatility level.
+// Annualised 20-day realised vol vs its own 100-bar SMA determines vol state.
+float lr     = math.log(close / nz(close[1], close))
+float vol20  = ta.stdev(lr, 20) * math.sqrt(252)
+float vol_ma = ta.sma(vol20, 100)
+bool  hi_vol = vol20 > vol_ma * 1.25
+bool  lo_vol = vol20 < vol_ma * 0.80
+string vol_lbl = hi_vol ? "HIGH" : lo_vol ? "LOW" : "NORM"
+color  vol_clr = hi_vol ? BEAR_C : lo_vol ? BULL_C : TXT_D
+
+// Vol-adjusted position: boost when vol aligns with regime, cut when it fights it
+float hmm_adj = hi_vol ? (sg < 0 ? 1.2 : 0.7) : lo_vol ? (sg > 0 ? 1.2 : 0.7) : 1.0
+float hmm_pos = na(sg) ? na : math.max(-1.0, math.min(1.0, sg * hmm_adj))
+string hmm_ps = na(hmm_pos) ? "—" : (hmm_pos >= 0 ? "+" : "") + str.tostring(hmm_pos * 100, "#.#") + "%"
+color  hmm_pc = na(hmm_pos) ? TXT_D : hmm_pos > 0.05 ? BULL_C : hmm_pos < -0.05 ? BEAR_C : TXT_D
+
+// ─── REGIME BACKGROUND ───────────────────────────────────────────────────────
+color regime_bg = not na(cs) ? (cs == 1 ? color.new(BULL_C, 92) : cs == 2 ? color.new(BEAR_C, 92) : color.new(SIDE_C, 96)) : na
+bgcolor(SHOW ? regime_bg : na, title="Regime background")
+
+// ─── TABLE (6 cols × 10 rows) ─────────────────────────────────────────────────
+var table T = table.new(position.top_right, 6, 10, bgcolor=BG_DRK, border_color=#2a2a4a, border_width=1, frame_color=#444466, frame_width=1)
+
+if barstate.islast
+    table.set_position(T, position.top_right)
+
+    string rn   = na(cs) ? "—" : cs == 1 ? "BULL" : cs == 2 ? "BEAR" : "SIDEWAYS"
+    color  rc   = na(cs) ? TXT_D : cs == 1 ? BULL_C : cs == 2 ? BEAR_C : SIDE_C
+    string sgs  = na(sg)  ? "—" : (sg  >= 0 ? "+" : "") + str.tostring(sg,  "#.###")
+    color  sgc  = na(sg)  ? TXT_D : sg  > 0.05 ? BULL_C : sg  < -0.05 ? BEAR_C : TXT_D
+    string pss  = na(pos) ? "—" : (pos >= 0 ? "+" : "") + str.tostring(pos * 100, "#.#") + "%"
+    color  psc  = na(pos) ? TXT_D : pos > 0.01 ? BULL_C : pos < -0.01 ? BEAR_C : TXT_D
+    string fwd1 = na(ns2)    ? "—" : str.tostring(ns2*100,"#")    + "·" + str.tostring(nb*100,"#")    + "·" + str.tostring(nd*100,"#")    + "%"
+    string fwd2 = na(t2_side)? "—" : str.tostring(t2_side*100,"#")+ "·" + str.tostring(t2_bull*100,"#")+ "·" + str.tostring(t2_bear*100,"#")+ "%"
+    string fwd3 = na(t3_side)? "—" : str.tostring(t3_side*100,"#")+ "·" + str.tostring(t3_bull*100,"#")+ "·" + str.tostring(t3_bear*100,"#")+ "%"
+    color  f2c  = na(sg2) ? TXT_D : sg2 > 0.05 ? color.new(BULL_C, 30) : sg2 < -0.05 ? color.new(BEAR_C, 30) : TXT_D
+    color  f3c  = na(sg3) ? TXT_D : sg3 > 0.05 ? color.new(BULL_C, 55) : sg3 < -0.05 ? color.new(BEAR_C, 55) : TXT_D
+
+    // ── Row 0: Title ─────────────────────────────────────────────────────────
+    table.cell(T, 0, 0, "MARKOV  2.0",  text_color=TXT_W,  bgcolor=HDR_BG, text_size=size.normal, text_halign=text.align_left)
+    table.cell(T, 1, 0, "standalone",   text_color=TXT_D,  bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 2, 0, "100% cap",     text_color=TXT_D,  bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 3, 0, "stride ✓",     text_color=TXT_D,  bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 4, 0, "FIX 1·2·3",   text_color=TXT_D,  bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 5, 0, "HMM ✓",        text_color=HMM_C,  bgcolor=HDR_BG, text_size=size.tiny)
+
+    // ── Row 1: Regime + Signal ────────────────────────────────────────────────
+    table.cell(T, 0, 1, "Regime",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 1, rn,        text_color=rc,    bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 2, 1, "",        text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 3, 1, "Signal",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 4, 1, sgs,       text_color=sgc,   bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 5, 1, "",        text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+
+    // ── Row 2: Position + t+1 forecast ───────────────────────────────────────
+    table.cell(T, 0, 2, "Position",    text_color=TXT_D, bgcolor=BG_CEL, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 2, pss,           text_color=psc,   bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 2, 2, "",            text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 3, 2, "s·b·r  t+1",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 4, 2, fwd1,          text_color=TXT_W, bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 5, 2, "",            text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+
+    // ── Row 3: t+2 + t+3 forecasts ───────────────────────────────────────────
+    table.cell(T, 0, 3, "t+2 s·b·r",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(T, 1, 3, fwd2,          text_color=f2c,   bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 2, 3, "",            text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 3, 3, "t+3 s·b·r",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 4, 3, fwd3,          text_color=f3c,   bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 5, 3, "",            text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+
+    // ── Row 4: HMM vol + adjusted position ───────────────────────────────────
+    table.cell(T, 0, 4, "Vol (ann)",   text_color=HMM_C,  bgcolor=BG_CEL, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(T, 1, 4, str.tostring(vol20*100,"#.#") + "%  " + vol_lbl, text_color=vol_clr, bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 2, 4, "",            text_color=TXT_D,  bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 3, 4, "HMM pos",    text_color=HMM_C,  bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 4, 4, hmm_ps,        text_color=hmm_pc, bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 5, 4, "",            text_color=TXT_D,  bgcolor=BG_CEL, text_size=size.tiny)
+
+    // ── Row 5: Matrix header ──────────────────────────────────────────────────
+    table.cell(T, 0, 5, "↓ FROM",  text_color=TXT_D,  bgcolor=BG_DRK, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(T, 1, 5, "→ SIDE",  text_color=SIDE_C, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 2, 5, "→ BULL",  text_color=BULL_C, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 3, 5, "→ BEAR",  text_color=BEAR_C, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 4, 5, "STICK",   text_color=TXT_D,  bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 5, 5, "n",       text_color=TXT_D,  bgcolor=BG_DRK, text_size=size.tiny)
+
+    // ── Row 6: SIDEWAYS ───────────────────────────────────────────────────────
+    bool  is_s = not na(cs) and cs == 0
+    color s_bg = is_s ? color.new(SIDE_C, 82) : BG_CEL
+    table.cell(T, 0, 6, "SIDE",                                text_color=SIDE_C, bgcolor=s_bg, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 6, str.tostring(p00 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 2, 6, str.tostring(p01 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 3, 6, str.tostring(p02 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 4, 6, str.tostring(p00 * 100, "#.#") + "%", text_color=SIDE_C, bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 5, 6, str.tostring(r0),                     text_color=TXT_D,  bgcolor=s_bg, text_size=size.tiny)
+
+    // ── Row 7: BULL ───────────────────────────────────────────────────────────
+    bool  is_b = not na(cs) and cs == 1
+    color b_bg = is_b ? color.new(BULL_C, 82) : BG_CEL
+    table.cell(T, 0, 7, "BULL",                                text_color=BULL_C, bgcolor=b_bg, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 7, str.tostring(p10 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 2, 7, str.tostring(p11 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 3, 7, str.tostring(p12 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 4, 7, str.tostring(p11 * 100, "#.#") + "%", text_color=BULL_C, bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 5, 7, str.tostring(r1),                     text_color=TXT_D,  bgcolor=b_bg, text_size=size.tiny)
+
+    // ── Row 8: BEAR ───────────────────────────────────────────────────────────
+    bool  is_r = not na(cs) and cs == 2
+    color r_bg = is_r ? color.new(BEAR_C, 82) : BG_CEL
+    table.cell(T, 0, 8, "BEAR",                                text_color=BEAR_C, bgcolor=r_bg, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 8, str.tostring(p20 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 2, 8, str.tostring(p21 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 3, 8, str.tostring(p22 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 4, 8, str.tostring(p22 * 100, "#.#") + "%", text_color=BEAR_C, bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 5, 8, str.tostring(r2),                     text_color=TXT_D,  bgcolor=r_bg, text_size=size.tiny)
+
+    // ── Row 9: Footer ─────────────────────────────────────────────────────────
+    int tot = r0 + r1 + r2
+    table.cell(T, 0, 9, "win=" + str.tostring(WIN) + "  n=" + str.tostring(tot), text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(T, 1, 9, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 2, 9, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 3, 9, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 4, 9, "±" + str.tostring(BULL * 100, "#") + "% thresh",         text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 5, 9, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)

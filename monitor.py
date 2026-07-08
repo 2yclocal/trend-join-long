@@ -6,9 +6,16 @@ Started by GitHub Actions around the market open. Flow:
   1. Rebuild the morning gap list (same pipeline as the premarket scan —
      the premarket window is closed by then, so the list is stable).
   2. Send a "monitor live" message with each stock's trigger level.
-  3. From 10:00 AM to 3:30 PM ET (8:00–1:30 MT), poll 1-minute bars every
-     POLL_SECONDS and alert 🚨 the first time a stock trades above its
-     trigger = max(premarket high, yesterday's high). One alert per stock.
+  3. Poll 1-minute bars every POLL_SECONDS continuously from startup through
+     3:30 PM ET (1:30 MT), tracking each stock's price relative to its
+     trigger = max(premarket high, yesterday's high). Alert 🚨 only on a
+     FRESH cross — the poll where price is above trigger immediately after a
+     poll where it was at/below — and only once the entry window (10:00 AM
+     ET / 8:00 MT) is open. Mirrors the TJL TradingView indicator's
+     close > entry and close[1] <= entry logic: if price is already above
+     the trigger when the window opens (never dipped back below during the
+     pre-window wait), that alone does NOT fire — it waits for a genuine
+     new crossing. One alert per stock.
 
 Stop shown in the alert follows the plan: 1% below the lower of the
 premarket high and the session low-of-day at trigger time.
@@ -96,12 +103,18 @@ def main():
     send_text(build_message(result, emoji="👁", title="TREND JOIN LONG — Monitor Live"))
     logger.info(f"Watching {len(watch)}: {list(watch)}")
 
-    while _now_et().time() < WINDOW_START:
-        time_mod.sleep(30)
+    # Per-symbol "was price above trigger on the last poll?" state, tracked
+    # continuously from monitor startup (before the entry window even opens)
+    # so a fresh cross can be told apart from "already above when the window
+    # opened." None = no poll yet (first observation just seeds the baseline,
+    # never fires).
+    was_above: dict[str, bool | None] = {sym: None for sym in watch}
 
     triggered: set[str] = set()
     while _now_et().time() < WINDOW_END and len(triggered) < len(watch):
-        today = _now_et().date()
+        now = _now_et()
+        today = now.date()
+        window_open = now.time() >= WINDOW_START
         pending = [s for s in watch if s not in triggered]
         try:
             bars = get_intraday_bars(pending, days=1)
@@ -119,9 +132,14 @@ def main():
             last = float(rth["Close"].iloc[-1])
             lod = float(rth["Low"].min())
             h = watch[sym]
-            if last > h.trigger:
+            is_above = last > h.trigger
+
+            fresh_cross = window_open and was_above[sym] is False and is_above
+            was_above[sym] = is_above
+
+            if fresh_cross:
                 triggered.add(sym)
-                logger.info(f"BREAKOUT {sym}: {last} > {h.trigger}")
+                logger.info(f"BREAKOUT {sym}: {last} > {h.trigger} (fresh cross)")
                 send_text(_breakout_alert(h, last, lod))
 
         time_mod.sleep(POLL_SECONDS)

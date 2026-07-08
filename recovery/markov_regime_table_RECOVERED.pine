@@ -1,0 +1,144 @@
+//@version=6
+indicator("Markov 2.0 — Regime Table", overlay=true, max_bars_back=5000)
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+string G = "Markov 2.0"
+int   WIN  = input.int  (20,    "Stride window (bars)", minval=5,     maxval=250,    group=G)
+float BULL = input.float(0.02,  "Bull threshold",       step=0.005,   minval=0.001,  group=G)
+float BEAR = input.float(-0.02, "Bear threshold",       step=0.005,   maxval=-0.001, group=G)
+bool  SHOW = input.bool (false, "Regime background",                                 group=G)
+
+// ─── COLORS ───────────────────────────────────────────────────────────────────
+color BULL_C = #2ecc71
+color BEAR_C = #e74c3c
+color SIDE_C = #f0c040
+color BG_DRK = #1a1a2e
+color BG_CEL = #1e2a4a
+color TXT_W  = #e0e0e0
+color TXT_D  = #6677aa
+color HDR_BG = #0f3460
+
+// ─── STATE MACHINE — FIX 1: stride-sampled, non-overlapping windows ───────────
+var float pbc = na          // close at last boundary
+var int   cs  = na          // current regime: 0=SIDE  1=BULL  2=BEAR
+var matrix<int> cnt = matrix.new<int>(3, 3, 0)
+
+if bar_index % WIN == 0
+    if not na(pbc)
+        float ret = (close - pbc) / pbc
+        int   ns  = ret >= BULL ? 1 : ret <= BEAR ? 2 : 0
+        if not na(cs)
+            matrix.set(cnt, cs, ns, matrix.get(cnt, cs, ns) + 1)
+        cs := ns
+    pbc := close
+
+// ─── PROBABILITY MATRIX ───────────────────────────────────────────────────────
+int r0 = matrix.get(cnt,0,0) + matrix.get(cnt,0,1) + matrix.get(cnt,0,2)
+int r1 = matrix.get(cnt,1,0) + matrix.get(cnt,1,1) + matrix.get(cnt,1,2)
+int r2 = matrix.get(cnt,2,0) + matrix.get(cnt,2,1) + matrix.get(cnt,2,2)
+
+float p00 = r0 > 0 ? float(matrix.get(cnt,0,0)) / float(r0) : 0.0
+float p01 = r0 > 0 ? float(matrix.get(cnt,0,1)) / float(r0) : 0.0
+float p02 = r0 > 0 ? float(matrix.get(cnt,0,2)) / float(r0) : 0.0
+float p10 = r1 > 0 ? float(matrix.get(cnt,1,0)) / float(r1) : 0.0
+float p11 = r1 > 0 ? float(matrix.get(cnt,1,1)) / float(r1) : 0.0
+float p12 = r1 > 0 ? float(matrix.get(cnt,1,2)) / float(r1) : 0.0
+float p20 = r2 > 0 ? float(matrix.get(cnt,2,0)) / float(r2) : 0.0
+float p21 = r2 > 0 ? float(matrix.get(cnt,2,1)) / float(r2) : 0.0
+float p22 = r2 > 0 ? float(matrix.get(cnt,2,2)) / float(r2) : 0.0
+
+// ─── SIGNAL & POSITION (STANDALONE 100% cap) ─────────────────────────────────
+float nb = na(cs) ? na : cs == 0 ? p01 : cs == 1 ? p11 : p21   // P(bull t+1)
+float nd = na(cs) ? na : cs == 0 ? p02 : cs == 1 ? p12 : p22   // P(bear t+1)
+float ns2 = na(cs) ? na : cs == 0 ? p00 : cs == 1 ? p10 : p20  // P(side t+1)
+float sg = na(nb)  ? na : nb - nd
+float pos = na(sg) ? na : math.max(-1.0, math.min(1.0, sg))
+
+// ─── REGIME BACKGROUND ───────────────────────────────────────────────────────
+color regime_bg = not na(cs) ? (cs == 1 ? color.new(BULL_C, 92) : cs == 2 ? color.new(BEAR_C, 92) : color.new(SIDE_C, 96)) : na
+bgcolor(SHOW ? regime_bg : na, title="Regime background")
+
+// ─── TABLE ────────────────────────────────────────────────────────────────────
+var table T = table.new(position.top_right, 6, 9, bgcolor=BG_DRK, border_color=#2a2a4a, border_width=1, frame_color=#444466, frame_width=1)
+
+if barstate.islast
+    table.set_position(T, position.top_right)
+    // Derived display strings
+    string rn  = na(cs) ? "—" : cs == 1 ? "BULL" : cs == 2 ? "BEAR" : "SIDEWAYS"
+    color  rc  = na(cs) ? TXT_D : cs == 1 ? BULL_C : cs == 2 ? BEAR_C : SIDE_C
+    string sgs = na(sg)  ? "—" : (sg  >= 0 ? "+" : "") + str.tostring(sg,  "#.###")
+    color  sgc = na(sg)  ? TXT_D : sg  > 0.05 ? BULL_C : sg  < -0.05 ? BEAR_C : TXT_D
+    string pss = na(pos) ? "—" : (pos >= 0 ? "+" : "") + str.tostring(pos * 100, "#.#") + "%"
+    color  psc = na(pos) ? TXT_D : pos > 0.01 ? BULL_C : pos < -0.01 ? BEAR_C : TXT_D
+    string fwd = na(ns2) ? "—" : str.tostring(ns2*100,"#") + "·" + str.tostring(nb*100,"#") + "·" + str.tostring(nd*100,"#") + "%"
+
+    // ── Row 0: Title ─────────────────────────────────────────────────────────
+    table.cell(T, 0, 0, "MARKOV  2.0",  text_color=TXT_W, bgcolor=HDR_BG, text_size=size.normal, text_halign=text.align_left)
+    table.cell(T, 1, 0, "standalone",   text_color=TXT_D, bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 2, 0, "100% cap",     text_color=TXT_D, bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 3, 0, "stride ✓",     text_color=TXT_D, bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 4, 0, "FIX 1·2·3",   text_color=TXT_D, bgcolor=HDR_BG, text_size=size.tiny)
+    table.cell(T, 5, 0, "",             text_color=TXT_D, bgcolor=HDR_BG, text_size=size.tiny)
+
+    // ── Row 1: Regime + Signal ────────────────────────────────────────────────
+    table.cell(T, 0, 1, "Regime",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 1, rn,        text_color=rc,    bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 2, 1, "",        text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 3, 1, "Signal",  text_color=TXT_D, bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 4, 1, sgs,       text_color=sgc,   bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 5, 1, "",        text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+
+    // ── Row 2: Position + t+1 forecast ───────────────────────────────────────
+    table.cell(T, 0, 2, "Position",   text_color=TXT_D, bgcolor=BG_CEL, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 2, pss,          text_color=psc,   bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 2, 2, "",           text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 3, 2, "s·b·r t+1", text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+    table.cell(T, 4, 2, fwd,          text_color=TXT_W, bgcolor=BG_CEL, text_size=size.small)
+    table.cell(T, 5, 2, "",           text_color=TXT_D, bgcolor=BG_CEL, text_size=size.tiny)
+
+    // ── Row 3: Matrix header ──────────────────────────────────────────────────
+    table.cell(T, 0, 3, "↓ FROM",  text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(T, 1, 3, "→ SIDE",  text_color=SIDE_C, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 2, 3, "→ BULL",  text_color=BULL_C, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 3, 3, "→ BEAR",  text_color=BEAR_C, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 4, 3, "STICK",   text_color=TXT_D,  bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 5, 3, "n",       text_color=TXT_D,  bgcolor=BG_DRK, text_size=size.tiny)
+
+    // ── Row 4: SIDEWAYS ───────────────────────────────────────────────────────
+    bool  is_s = not na(cs) and cs == 0
+    color s_bg = is_s ? color.new(SIDE_C, 82) : BG_CEL
+    table.cell(T, 0, 4, "SIDE",                           text_color=SIDE_C, bgcolor=s_bg, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 4, str.tostring(p00 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 2, 4, str.tostring(p01 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 3, 4, str.tostring(p02 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 4, 4, str.tostring(p00 * 100, "#.#") + "%", text_color=SIDE_C, bgcolor=s_bg, text_size=size.small)
+    table.cell(T, 5, 4, str.tostring(r0),                     text_color=TXT_D,  bgcolor=s_bg, text_size=size.tiny)
+
+    // ── Row 5: BULL ───────────────────────────────────────────────────────────
+    bool  is_b = not na(cs) and cs == 1
+    color b_bg = is_b ? color.new(BULL_C, 82) : BG_CEL
+    table.cell(T, 0, 5, "BULL",                               text_color=BULL_C, bgcolor=b_bg, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 5, str.tostring(p10 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 2, 5, str.tostring(p11 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 3, 5, str.tostring(p12 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 4, 5, str.tostring(p11 * 100, "#.#") + "%", text_color=BULL_C, bgcolor=b_bg, text_size=size.small)
+    table.cell(T, 5, 5, str.tostring(r1),                     text_color=TXT_D,  bgcolor=b_bg, text_size=size.tiny)
+
+    // ── Row 6: BEAR ───────────────────────────────────────────────────────────
+    bool  is_r = not na(cs) and cs == 2
+    color r_bg = is_r ? color.new(BEAR_C, 82) : BG_CEL
+    table.cell(T, 0, 6, "BEAR",                               text_color=BEAR_C, bgcolor=r_bg, text_size=size.small, text_halign=text.align_left)
+    table.cell(T, 1, 6, str.tostring(p20 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 2, 6, str.tostring(p21 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 3, 6, str.tostring(p22 * 100, "#.#") + "%", text_color=TXT_W,  bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 4, 6, str.tostring(p22 * 100, "#.#") + "%", text_color=BEAR_C, bgcolor=r_bg, text_size=size.small)
+    table.cell(T, 5, 6, str.tostring(r2),                     text_color=TXT_D,  bgcolor=r_bg, text_size=size.tiny)
+
+    // ── Row 7: Footer ─────────────────────────────────────────────────────────
+    int tot = r0 + r1 + r2
+    table.cell(T, 0, 7, "win=" + str.tostring(WIN) + "  n=" + str.tostring(tot), text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(T, 1, 7, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 2, 7, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 3, 7, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 4, 7, "±" + str.tostring(BULL * 100, "#.#") + "% thresh",       text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)
+    table.cell(T, 5, 7, "",                                                        text_color=TXT_D, bgcolor=BG_DRK, text_size=size.tiny)

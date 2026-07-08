@@ -1,0 +1,120 @@
+//@version=6
+// TJL — Day Levels
+// Gap-setup trade-plan levels + entry alert. REQUIRES "Extended trading hours".
+//   Before entry : Premarket High + Yesterday's High
+//   Entry        : price breaks above the HIGHER of premarket high and
+//                  yesterday's high, only after entryDelayMin minutes of the
+//                  session
+//   Stop (1R)    : 1% below the premarket high
+//   T1 / T2      : Entry + 1R / Entry + 2R
+indicator("TJL", overlay = true, max_labels_count = 500)
+
+// -- Inputs -------------------------------------------------------------------
+gapMinPct = input.float(3.0, "Min gap % vs prev close",     minval = 0.0)
+minPrice  = input.float(3.0, "Min price ($)",               minval = 0.0)
+stopPct   = input.float(1.0, "Stop % below premarket high", minval = 0.0)
+showHist  = input.bool(true, "Draw past days too")
+entryDelayMin = input.int(29, "Delay entry until N min after the open", minval = 0, group = "Timing")
+
+cYH    = input.color(#787B86, "Yesterday high", group = "Colors")
+cPMH   = input.color(#FF9800, "Premarket high", group = "Colors")
+cEntry = input.color(#2962FF, "Entry",          group = "Colors")
+cStop  = input.color(#F23645, "Stop",           group = "Colors")
+cTgt   = input.color(#089981, "Targets",        group = "Colors")
+
+// -- Yesterday's regular-session high/close (non-repainting) ------------------
+[yHigh, yClose] = request.security(syminfo.tickerid, "D", [high[1], close[1]], lookahead = barmerge.lookahead_on)
+
+// -- New-day reset (fires on the first premarket bar of each date) ------------
+newDay = ta.change(dayofmonth) != 0
+
+var float pmh       = na
+var bool  qualified = false
+var bool  triggered = false
+var int   rthOpenT  = na
+
+if newDay
+    pmh       := na
+    qualified := false
+    triggered := false
+    rthOpenT  := na
+
+// -- Track premarket high & first regular-session bar --------------------------
+if session.ispremarket
+    pmh := na(pmh) ? high : math.max(pmh, high)
+
+if session.ismarket and na(rthOpenT)
+    rthOpenT := time
+
+// -- Qualification: gap % vs prev close and price floor (latched) -------------
+gapNow = (not na(yClose) and yClose > 0.0) ? (close - yClose) / yClose * 100.0 : na
+if not na(gapNow) and close > minPrice and gapNow >= gapMinPct
+    qualified := true
+
+// -- Levels ---------------------------------------------------------------------
+// Entry = the higher of premarket high and yesterday's high.
+entry = (not na(pmh) and not na(yHigh)) ? math.max(pmh, yHigh) : na
+stop  = not na(pmh) ? pmh * (1.0 - stopPct / 100.0) : na
+oneR  = (not na(entry) and not na(stop)) ? entry - stop : na
+t1 = not na(oneR) ? entry + oneR : na
+t2 = not na(oneR) ? entry + 2.0 * oneR : na
+
+// -- Entry stays closed until entryDelayMin minutes of the session pass --------
+entryOpen = not na(rthOpenT) and (time - rthOpenT) >= entryDelayMin * 60000
+
+crossUp = qualified and session.ismarket and entryOpen and not triggered and not na(entry) and close > entry and close[1] <= entry
+if crossUp
+    triggered := true
+
+// -- Draw gates -------------------------------------------------------------------
+isToday = dayofmonth == dayofmonth(timenow, syminfo.timezone) and month == month(timenow, syminfo.timezone) and year == year(timenow, syminfo.timezone)
+drawOK = qualified and (showHist or isToday)
+
+// Confine each day's lines to its own session (no cross-day extension).
+inSess = session.ispremarket or session.ismarket
+show   = drawOK and inSess
+
+// entryShown is the single gate for everything post-entry: requires BOTH
+// triggered (a fresh cross happened) AND entryOpen (belt-and-suspenders --
+// triggered can only become true when entryOpen was already true, but this
+// makes it impossible for the post-entry levels to ever render early).
+entryShown = triggered and entryOpen
+
+// Before entry: Yesterday's High + Premarket High. After entry: Entry/Stop/T1/T2.
+plot(show and not triggered ? yHigh : na, "YestHigh", color = cYH,    style = plot.style_linebr, linewidth = 1)
+plot(show and not triggered ? pmh   : na, "PMH",      color = cPMH,   style = plot.style_linebr, linewidth = 1)
+plot(show and entryShown    ? entry : na, "Entry",    color = cEntry, style = plot.style_linebr, linewidth = 2)
+plot(show and entryShown    ? stop  : na, "Stop",     color = cStop,  style = plot.style_linebr, linewidth = 1)
+plot(show and entryShown    ? t1    : na, "T1",       color = cTgt,   style = plot.style_linebr, linewidth = 1)
+plot(show and entryShown    ? t2    : na, "T2",       color = cTgt,   style = plot.style_linebr, linewidth = 1)
+
+// -- Entry marker + alert ---------------------------------------------------------
+plotshape(crossUp, "Entry", shape.triangleup, location.belowbar, color = cEntry, size = size.small)
+alertcondition(crossUp, "TJL Entry", "TJL entry: price broke above the higher of PMH and yesterday's high")
+
+// -- Right-edge labels for the current day -----------------------------------------
+f_lab(label _lab, float _y, string _txt, color _col) =>
+    label.delete(_lab)
+    na(_y) ? na : label.new(bar_index, _y, _txt + " " + str.tostring(_y, format.mintick), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(_col, 20), textcolor = color.white, size = size.small)
+
+var label lYH  = na
+var label lPMH = na
+var label lEn  = na
+var label lSt  = na
+var label lT1  = na
+var label lT2  = na
+
+if barstate.islast and qualified and isToday
+    lYH  := f_lab(lYH,  triggered ? na : yHigh,    "YestHigh", cYH)
+    lPMH := f_lab(lPMH, triggered ? na : pmh,      "PMH",      cPMH)
+    lEn  := f_lab(lEn,  entryShown ? entry : na,   "Entry",    cEntry)
+    lSt  := f_lab(lSt,  entryShown ? stop  : na,   "Stop",     cStop)
+    lT1  := f_lab(lT1,  entryShown ? t1    : na,   "T1",       cTgt)
+    lT2  := f_lab(lT2,  entryShown ? t2    : na,   "T2",       cTgt)
+
+// -- Warn if extended hours appears to be off --------------------------------------
+var label warnLbl = na
+if barstate.islast
+    label.delete(warnLbl)
+    if na(pmh) and session.ismarket and not na(yClose)
+        warnLbl := label.new(bar_index, high, "Enable Extended Hours for premarket levels", style = label.style_label_down, color = color.new(color.orange, 0), textcolor = color.white, size = size.small)
