@@ -27,6 +27,7 @@ from scanner.data_provider import (
     get_daily_bars,
     get_intraday_bars,
     premarket_slice,
+    robust_premarket_high,
 )
 from scanner.gap import GapHit, gap_percent, passes_filters
 
@@ -89,7 +90,7 @@ def run_live_scan(universe: list[tuple[str, str]]) -> ScanResult:
             symbol=sym, company_name=names.get(sym, sym),
             price=price, gap_pct=gap,
             prev_close=prev_close, prev_high=prev_high,
-            pm_high=float(pm["High"].max()),
+            pm_high=robust_premarket_high(pm),
             pm_volume=float(pm["Volume"].sum()),
         ))
     logger.info(f"Gap+price filter: {len(hits)} hits")

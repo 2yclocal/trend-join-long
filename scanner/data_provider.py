@@ -96,6 +96,34 @@ def premarket_slice(df: pd.DataFrame, day) -> pd.DataFrame:
     return df[mask]
 
 
+def robust_premarket_high(pm: pd.DataFrame) -> float:
+    """Premarket high with bad-tick wicks removed.
+
+    Yahoo's thin premarket feed emits 1-minute bars with spurious upper wicks
+    (a High far above the bar's own open/close, no volume). A naive max(High)
+    latches onto these and inflates both the reported PMH and the breakout
+    trigger. We drop bars whose upper wick exceeds pm_wick_filter_k × the
+    session's median bar range — a yardstick that scales with each stock's own
+    volatility, so genuine sharp moves on fast gappers are preserved.
+    """
+    if pm is None or pm.empty:
+        return float("nan")
+
+    high = pm["High"].astype(float)
+    if len(high) < 10:                       # too few bars to judge outliers
+        return float(high.max())
+
+    low = pm["Low"].astype(float)
+    body_top = pm[["Open", "Close"]].max(axis=1).astype(float)
+    upper_wick = high - body_top
+    med_range = float((high - low).median())
+    price = float(pm["Close"].iloc[-1]) or float(high.median())
+
+    threshold = max(settings.pm_wick_filter_k * med_range, 0.002 * price)
+    kept = high[upper_wick <= threshold]
+    return float(kept.max()) if not kept.empty else float(high.max())
+
+
 # Headlines from stock-roundup bots (ChartMill, generic wires) that name a
 # basket rather than a catalyst. Skipped in favour of company-specific news.
 _GENERIC_MARKERS = (

@@ -28,5 +28,10 @@ class Settings(BaseSettings):
     batch_size: int = 50           # symbols per yfinance batch download
     news_max_age_hours: int = 48   # catalyst headline freshness window
 
+    # Premarket high robustness — drop 1-min bars whose upper wick exceeds
+    # pm_wick_filter_k × the session's median bar range (bad ticks in Yahoo's
+    # thin premarket feed). Scales with each stock's own volatility.
+    pm_wick_filter_k: float = 2.5
+
 
 settings = Settings()
