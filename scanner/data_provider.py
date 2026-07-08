@@ -65,6 +65,22 @@ def get_daily_bars(symbols: list[str]) -> dict[str, pd.DataFrame]:
     return result
 
 
+def get_daily_bars_full(symbol: str) -> pd.DataFrame:
+    """Max available daily history for one symbol — used by the backtester
+    to gather enough gap events. Columns: open/high/low/close/volume."""
+    df = yf.Ticker(symbol).history(period="max", auto_adjust=False)
+    if df.empty:
+        raise ValueError(f"No daily history for {symbol}")
+    df.columns = [c.lower() for c in df.columns]
+    df = df[["open", "high", "low", "close", "volume"]].copy()
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    df.sort_index(inplace=True)
+    df.dropna(subset=["close"], inplace=True)
+    if df.empty:
+        raise ValueError(f"No daily history for {symbol}")
+    return df
+
+
 def get_intraday_bars(symbols: list[str], days: int = 1) -> dict[str, pd.DataFrame]:
     """1-minute bars including pre/post market, index in ET."""
     result: dict[str, pd.DataFrame] = {}
