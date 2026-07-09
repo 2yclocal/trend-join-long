@@ -105,9 +105,15 @@ def _get_intraday_bars_yfinance(symbols: list[str], days: int = 1) -> dict[str, 
 
 
 def _get_intraday_bars_alpaca(symbols: list[str], days: int = 1) -> dict[str, pd.DataFrame]:
-    """1-minute bars including pre/post market, index in ET. Alpaca IEX feed —
-    a real exchange feed (unlike Yahoo's delayed/thin premarket data), free
-    with any Alpaca account (paper trading is enough, no funding needed).
+    """1-minute bars including pre/post market, index in ET. Alpaca IEX feed.
+
+    TESTED 2026-07-09, NOT RECOMMENDED for premarket use: the free IEX feed's
+    premarket coverage is too thin to trust — AAPL had 0 premarket bars, AMAT
+    3, WDC 5, all badly undershooting TradingView's confirmed real highs (IEX
+    is one small venue; most premarket flow routes elsewhere). Kept dormant —
+    only activates if ALPACA_API_KEY/SECRET are set, which they currently
+    aren't in .env or GitHub secrets. A paid consolidated-tape feed (e.g.
+    Polygon.io) would be needed to actually fix this.
     """
     headers = {
         "APCA-API-KEY-ID": settings.alpaca_api_key,
