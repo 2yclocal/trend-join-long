@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     # Premarket high robustness — drop 1-min bars whose upper wick exceeds
     # pm_wick_filter_k × the session's median bar range (bad ticks in Yahoo's
     # thin premarket feed). Scales with each stock's own volatility.
-    pm_wick_filter_k: float = 2.5
+    # Raised 2.5->5.0 on 2026-07-09 after AMAT's real ~$2 premarket spike
+    # (verified against TradingView) was incorrectly clipped at 2.5.
+    pm_wick_filter_k: float = 5.0
 
 
 settings = Settings()
