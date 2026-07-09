@@ -81,8 +81,11 @@ def get_daily_bars_full(symbol: str) -> pd.DataFrame:
     return df
 
 
-def get_intraday_bars(symbols: list[str], days: int = 1) -> dict[str, pd.DataFrame]:
-    """1-minute bars including pre/post market, index in ET."""
+_ALPACA_BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
+
+
+def _get_intraday_bars_yfinance(symbols: list[str], days: int = 1) -> dict[str, pd.DataFrame]:
+    """1-minute bars including pre/post market, index in ET. Yahoo/yfinance."""
     result: dict[str, pd.DataFrame] = {}
     for chunk in _chunks(symbols, settings.batch_size):
         try:
@@ -97,8 +100,76 @@ def get_intraday_bars(symbols: list[str], days: int = 1) -> dict[str, pd.DataFra
                 result[sym] = sub
         except Exception as exc:
             logger.warning(f"Intraday download failed for chunk starting {chunk[0]}: {exc}")
-    logger.info(f"Intraday bars: {len(result)}/{len(symbols)} symbols")
+    logger.info(f"Intraday bars (yfinance): {len(result)}/{len(symbols)} symbols")
     return result
+
+
+def _get_intraday_bars_alpaca(symbols: list[str], days: int = 1) -> dict[str, pd.DataFrame]:
+    """1-minute bars including pre/post market, index in ET. Alpaca IEX feed —
+    a real exchange feed (unlike Yahoo's delayed/thin premarket data), free
+    with any Alpaca account (paper trading is enough, no funding needed).
+    """
+    headers = {
+        "APCA-API-KEY-ID": settings.alpaca_api_key,
+        "APCA-API-SECRET-KEY": settings.alpaca_secret_key,
+    }
+    now_utc = datetime.now(timezone.utc)
+    start = (now_utc - timedelta(days=days)).replace(hour=8, minute=0, second=0, microsecond=0)  # ~4am ET
+
+    result: dict[str, pd.DataFrame] = {}
+    for chunk in _chunks(symbols, settings.batch_size):
+        page_token = None
+        try:
+            while True:
+                params = {
+                    "symbols": ",".join(chunk),
+                    "timeframe": "1Min",
+                    "start": start.isoformat().replace("+00:00", "Z"),
+                    "end": now_utc.isoformat().replace("+00:00", "Z"),
+                    "feed": settings.alpaca_data_feed,
+                    "adjustment": "raw",
+                    "limit": 10000,
+                }
+                if page_token:
+                    params["page_token"] = page_token
+                resp = requests.get(_ALPACA_BARS_URL, headers=headers, params=params, timeout=20)
+                resp.raise_for_status()
+                payload = resp.json()
+                for sym, bars in (payload.get("bars") or {}).items():
+                    if not bars:
+                        continue
+                    rows = [
+                        {
+                            "Datetime": b["t"],
+                            "Open": b["o"], "High": b["h"],
+                            "Low": b["l"], "Close": b["c"],
+                            "Volume": b["v"],
+                        }
+                        for b in bars
+                    ]
+                    sub = pd.DataFrame(rows)
+                    sub["Datetime"] = pd.to_datetime(sub["Datetime"], utc=True).dt.tz_convert(ET)
+                    sub.set_index("Datetime", inplace=True)
+                    result[sym] = pd.concat([result[sym], sub]) if sym in result else sub
+                page_token = payload.get("next_page_token")
+                if not page_token:
+                    break
+        except Exception as exc:
+            logger.warning(f"Alpaca intraday fetch failed for chunk starting {chunk[0]}: {exc}")
+    logger.info(f"Intraday bars (Alpaca): {len(result)}/{len(symbols)} symbols")
+    return result
+
+
+def get_intraday_bars(symbols: list[str], days: int = 1) -> dict[str, pd.DataFrame]:
+    """1-minute bars including pre/post market, index in ET.
+
+    Uses Alpaca's IEX feed when credentials are configured (a real exchange
+    feed — see the WDC/AMAT premarket-accuracy investigation, July 9 2026);
+    falls back to yfinance otherwise.
+    """
+    if settings.alpaca_api_key and settings.alpaca_secret_key:
+        return _get_intraday_bars_alpaca(symbols, days)
+    return _get_intraday_bars_yfinance(symbols, days)
 
 
 def premarket_slice(df: pd.DataFrame, day) -> pd.DataFrame:

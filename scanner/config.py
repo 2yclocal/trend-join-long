@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     # Finnhub (better news headlines; falls back to Yahoo if unset)
     finnhub_api_key: str = ""
 
+    # Alpaca Market Data (real IEX exchange feed for intraday/premarket bars,
+    # replacing yfinance's delayed/synthetic feed). Falls back to yfinance if
+    # either key is unset. Free with a paper-trading account.
+    alpaca_api_key: str = ""
+    alpaca_secret_key: str = ""
+    alpaca_data_feed: str = "iex"
+
     # Gap scan filters
     gap_min_pct: float = 3.0       # minimum gap % vs previous close
     min_price: float = 3.0         # minimum share price
