@@ -47,7 +47,7 @@ from scanner.config import settings
 from scanner.data_provider import ET, get_intraday_bars
 from scanner.engine import run_live_scan
 from scanner.gap import GapHit
-from scanner.notifier import _MT, build_message, send_text
+from scanner.notifier import _MT, TelegramSendError, build_message, send_text
 from scanner.universe import load_us_symbols
 
 WINDOW_START = dtime(10, 0)    # ET — 8:00 AM MT (user's trade-plan window)
@@ -100,7 +100,17 @@ def main():
 
     # Same rich format as the gap-scan alert (ranked list + levels + plan),
     # with a header that marks it as the monitor going live for the session.
-    send_text(build_message(result, emoji="👁", title="TREND JOIN LONG — Monitor Live"))
+    # A send failure here (after retries) is logged but doesn't abort the
+    # session — real breakout alerts later in the day matter more than this
+    # startup message, so monitoring still proceeds. had_send_failure makes
+    # the job exit non-zero at the end so the miss is visible in Actions
+    # instead of vanishing into a silently-green run.
+    had_send_failure = False
+    try:
+        send_text(build_message(result, emoji="👁", title="TREND JOIN LONG — Monitor Live"))
+    except TelegramSendError as exc:
+        logger.error(f"Failed to deliver Monitor Live message: {exc}")
+        had_send_failure = True
     logger.info(f"Watching {len(watch)}: {list(watch)}")
 
     # Per-symbol "was price above trigger on the last poll?" state, tracked
@@ -140,13 +150,21 @@ def main():
             if fresh_cross:
                 triggered.add(sym)
                 logger.info(f"BREAKOUT {sym}: {last} > {h.trigger} (fresh cross)")
-                send_text(_breakout_alert(h, last, lod))
+                try:
+                    send_text(_breakout_alert(h, last, lod))
+                except TelegramSendError as exc:
+                    logger.error(f"Failed to deliver breakout alert for {sym}: {exc}")
+                    had_send_failure = True
 
         time_mod.sleep(POLL_SECONDS)
 
     logger.info(
         f"Session done — {len(triggered)}/{len(watch)} triggered: {sorted(triggered)}"
     )
+
+    if had_send_failure:
+        logger.error("One or more Telegram sends failed this session — exiting non-zero.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -34,6 +35,14 @@ _MT = ZoneInfo("America/Denver")
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
+_SEND_RETRIES = 3
+_SEND_BACKOFF_SECONDS = 3.0
+
+
+class TelegramSendError(RuntimeError):
+    """Raised when a Telegram message could not be delivered after retries."""
+
+
 # Trade-plan times shown in Mountain Time (ET−2h; holds year-round since
 # both zones shift for DST together). ET original: 10:00–3:30, flat 3:51.
 _PLAN = (
@@ -45,10 +54,17 @@ _PLAN = (
 )
 
 
-def _send(text: str) -> bool:
+def _send(text: str) -> None:
+    """Send one Telegram message, retrying transient failures.
+
+    Raises TelegramSendError if delivery still fails after all retries —
+    callers decide whether to let that propagate (crash = a loud, visible
+    failure in the job's exit status) or catch it and keep going (e.g. one
+    bad send mid-session shouldn't stop the rest of a monitoring run).
+    """
     if not settings.telegram_bot_token or not settings.telegram_chat_id:
         logger.warning("Telegram credentials not configured — skipping notification")
-        return False
+        raise TelegramSendError("Telegram credentials not configured")
 
     url = _TELEGRAM_API.format(token=settings.telegram_bot_token)
     payload = {
@@ -57,14 +73,21 @@ def _send(text: str) -> bool:
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        logger.info("Telegram notification sent")
-        return True
-    except Exception as exc:
-        logger.error(f"Telegram send failed: {exc}")
-        return False
+    last_exc: Exception | None = None
+    for attempt in range(1, _SEND_RETRIES + 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            resp.raise_for_status()
+            logger.info("Telegram notification sent")
+            return
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(f"Telegram send attempt {attempt}/{_SEND_RETRIES} failed: {exc}")
+            if attempt < _SEND_RETRIES:
+                time.sleep(_SEND_BACKOFF_SECONDS * attempt)
+
+    logger.error(f"Telegram send failed after {_SEND_RETRIES} attempts: {last_exc}")
+    raise TelegramSendError(f"Telegram send failed after {_SEND_RETRIES} attempts") from last_exc
 
 
 def _price(v: float) -> str:
@@ -110,9 +133,13 @@ def build_message(
 
 
 def send_scan_results(result: ScanResult) -> None:
+    """Raises TelegramSendError if delivery fails after retries."""
     _send(build_message(result))
 
 
-def send_text(text: str) -> bool:
-    """Send a raw HTML message (used by the intraday breakout monitor)."""
-    return _send(text)
+def send_text(text: str) -> None:
+    """Send a raw HTML message (used by the intraday breakout monitor).
+
+    Raises TelegramSendError if delivery fails after retries.
+    """
+    _send(text)
