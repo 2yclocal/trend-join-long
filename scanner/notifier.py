@@ -125,10 +125,24 @@ def build_message(
         return header + "\nNo qualifying gaps today."
 
     blocks = [_format_hit(i, h) for i, h in enumerate(result.hits, start=1)]
-    message = header + "\n" + "\n\n".join(blocks) + "\n\n" + _PLAN
 
-    if len(message) > 4000:  # Telegram hard limit is 4096
-        message = message[:3990] + "\n…(truncated)"
+    # Telegram's hard cap is 4096 chars. Include whole hit-blocks up to that
+    # limit rather than slicing the finished string — a character-level cut
+    # can land inside an HTML tag (e.g. an unclosed <i>), which makes
+    # Telegram reject the ENTIRE message with a 400 "can't parse entities"
+    # error instead of just showing fewer hits.
+    limit = 4000
+    included: list[str] = []
+    for block in blocks:
+        candidate = header + "\n" + "\n\n".join(included + [block]) + "\n\n" + _PLAN
+        if len(candidate) > limit:
+            break
+        included.append(block)
+
+    message = header + "\n" + "\n\n".join(included) + "\n\n" + _PLAN
+    dropped = len(blocks) - len(included)
+    if dropped:
+        message += f"\n\n…and {dropped} more (list truncated)"
     return message
 
 
